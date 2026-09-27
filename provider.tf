@@ -1,11 +1,19 @@
-provider "google" {
-  region      = var.gcp_region
-  credentials = var.gcp_service_credentials
-  project     = var.gcp_project_id
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = ">= 5.0, < 7.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
+  }
 }
 
-provider "google-beta" {
-  region      = var.gcp_region
-  credentials = var.gcp_service_credentials
-  project     = var.gcp_project_id
+provider "google" {
+  project = var.gcp_project_id
+  region  = var.gcp_region
 }
