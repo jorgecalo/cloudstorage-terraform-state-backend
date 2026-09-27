@@ -1,4 +1,4 @@
-# cloudstorage-terraform-state-backend
+# Terraform state backend in Google Cloud Storage bucket
 
 By default, Terraform stores its state file (`terraform.tfstate`) locally on your computer. That works fine when you're experimenting on your own, but as soon as you work in a team or run pipelines, you need a shared, secure place to store that state.
 
