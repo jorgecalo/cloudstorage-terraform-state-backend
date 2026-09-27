@@ -1,158 +1,103 @@
 # cloudstorage-terraform-state-backend
 
-This Terraform configuration provisions a hardened **Google Cloud Storage (GCS)** bucket designed to store remote Terraform state files (`terraform.tfstate`), along with a [`backend.tf.sample`](backend.tf.sample) template for migrating local state to the remote GCS backend.
+By default, Terraform stores its state file (`terraform.tfstate`) locally on your computer. That works fine when you're experimenting on your own, but as soon as you work in a team or run pipelines, you need a shared, secure place to store that state.
 
-## Features & Security Controls
+This repository helps you spin up a **Google Cloud Storage (GCS)** bucket configured specifically for Terraform state, and includes a [`backend.tf.sample`](backend.tf.sample) file so you can easily move your local state into the cloud.
 
-- **Automated API Enablement**: Enables `cloudresourcemanager.googleapis.com` and `storage.googleapis.com` with explicit dependency ordering (`disable_on_destroy = false`).
-- **Globally Unique Bucket Naming**: Uses an 8-byte random hex prefix (`<random-hex>-bucket-tfstate`) to prevent global GCS bucket naming collisions.
-- **Public Access Prevention**: Enforces `public_access_prevention = "enforced"` so state files containing sensitive data can never be exposed publicly.
-- **Uniform Bucket-Level Access (UBLA)**: Enables `uniform_bucket_level_access = true` to disable legacy ACLs and manage permissions strictly through Cloud IAM.
-- **State Versioning & Lifecycle Retention**: Enables object versioning (`versioning.enabled = true`) for state recovery and automatically prunes archived noncurrent state versions beyond a configurable retention count (`noncurrent_version_retention_count`, default `10`).
-- **Accidental Deletion Protection**: Sets `force_destroy = false` to prevent accidental destruction of a bucket containing active state files.
-- **Keyless Authentication Ready**: Uses Google Cloud **Application Default Credentials (ADC)** instead of static service account JSON key files.
+### What this setup does for you
+- **Enables the required GCP APIs** automatically (Cloud Resource Manager and Cloud Storage).
+- **Creates a globally unique bucket name** (`<random-hex>-bucket-tfstate`) so you don't run into naming conflicts.
+- **Keeps your state safe and private** by blocking public access, enforcing IAM-only permissions (uniform bucket-level access), and preventing accidental bucket deletion (`force_destroy = false`).
+- **Turns on object versioning** so you can recover previous state files if something goes wrong, while automatically cleaning up old versions (keeping the latest 10 by default) so you don't pay for clutter.
 
-## Repository Structure
+---
 
-| File | Description |
-| :--- | :--- |
-| [`provider.tf`](provider.tf) | Terraform version constraints (`>= 1.5.0`), required providers (`google`, `random`), and `google` provider configuration. |
-| [`main.tf`](main.tf) | Enables required Google Cloud APIs and provisions the hardened GCS state bucket. |
-| [`variables.tf`](variables.tf) | Input variables with type constraints, sensible defaults, and validation rules. |
-| [`outputs.tf`](outputs.tf) | Outputs the generated GCS bucket name (`state_bucket_name`) and URL (`state_bucket_url`). |
-| [`backend.tf.sample`](backend.tf.sample) | Sample GCS backend configuration block for migrating local state to the remote bucket. |
+## Before you start
 
-## Prerequisites & IAM Permissions
+Make sure you have:
+1. **[Terraform](https://developer.hashicorp.com/terraform/install)** (`v1.5.0` or newer) and the **[Google Cloud CLI (`gcloud`)](https://cloud.google.com/sdk/docs/install)** installed on your machine.
+2. **A Google Cloud project** where you want to host the state bucket.
+3. **The right permissions** on your Google Cloud account. Giving your account the **Storage Admin** (`roles/storage.admin`) and **Service Usage Admin** (`roles/serviceusage.serviceUsageAdmin`) roles covers everything needed, or you can grant these specific permissions:
+   - `serviceusage.services.enable` & `serviceusage.services.get` (to enable the Storage and Resource Manager APIs)
+   - `storage.buckets.create`, `storage.buckets.get`, `storage.buckets.list`, `storage.buckets.update`
+   - `storage.objects.create`, `storage.objects.delete`, `storage.objects.get`, `storage.objects.update`
 
-1. **Tools**:
-   - [Terraform](https://developer.hashicorp.com/terraform/install) `>= 1.5.0`
-   - [Google Cloud SDK (`gcloud`)](https://cloud.google.com/sdk/docs/install)
-2. **Google Cloud Permissions**:
-   Ensure your Google Cloud principal (user account or service account) has the following IAM permissions on the target project:
-   - **Service Usage** (e.g., `roles/serviceusage.serviceUsageAdmin`):
-     - `serviceusage.services.enable`
-     - `serviceusage.services.get`
-   - **Cloud Storage** (e.g., `roles/storage.admin`):
-     - `storage.buckets.create`
-     - `storage.buckets.get`
-     - `storage.buckets.list`
-     - `storage.buckets.update`
-     - `storage.objects.create`
-     - `storage.objects.delete`
-     - `storage.objects.get`
-     - `storage.objects.update`
+---
 
-## Usage Guide
+## Step-by-step guide
 
-### 1. Authenticate with Google Cloud
-Authenticate locally using **Application Default Credentials (ADC)** (avoid downloading static JSON service account keys):
+### 1. Log in to Google Cloud
+Instead of downloading service account JSON keys to your laptop (which are easy to leak), log in directly with your Google Cloud CLI using Application Default Credentials:
 
 ```bash
 gcloud auth application-default login
 ```
 
-*(Optional)* Set your default quota project if prompted:
-```bash
-gcloud auth application-default set-quota-project YOUR_GCP_PROJECT_ID
-```
-> **Note for CI/CD**: In automated pipelines (GitHub Actions, GitLab CI, Cloud Build), use [Workload Identity Federation](https://cloud.google.com/iam/docs/workload-identity-federation) or service account impersonation.
+> **Tip:** Running this in CI/CD (like GitHub Actions or GitLab)? Use [Workload Identity Federation](https://cloud.google.com/iam/docs/workload-identity-federation) instead of static key files.
 
-### 2. Configure Input Variables
-Create a `terraform.tfvars` file in the root directory (automatically ignored by [`.gitignore`](.gitignore)) or pass variables via the CLI:
+### 2. Set your Google Cloud Project ID
+Create a `terraform.tfvars` file in the root of this project and add your GCP project ID (don't worry—`*.tfvars` files are already in `.gitignore` so you won't accidentally commit it):
 
 ```hcl
-# terraform.tfvars
-gcp_project_id                     = "your-gcp-project-id"
-gcp_region                         = "europe-west4" # Optional (default: "europe-west4")
-bucket_location                    = "EU"           # Optional (default: "EU")
-storage_class                      = "STANDARD"     # Optional (default: "STANDARD")
-noncurrent_version_retention_count = 10             # Optional (default: 10)
+gcp_project_id = "your-gcp-project-id"
 ```
 
-### 3. Initialize and Provision the State Bucket
-Initialize Terraform providers, review the execution plan, and apply:
+By default, the bucket is created in the **`EU`** multi-region using the **`europe-west4`** provider region. If you'd like to customize the location or retention settings, you can also add any of these optional variables to your `terraform.tfvars` file:
+
+| Variable | What it does | Default |
+| :--- | :--- | :--- |
+| `gcp_project_id` | **Required.** Your Google Cloud project ID. | — |
+| `gcp_region` | Default region used by the Google provider. | `"europe-west4"` |
+| `bucket_location` | Where the GCS bucket lives (e.g., `"EU"`, `"US"`, `"europe-west4"`). | `"EU"` |
+| `storage_class` | Storage tier for the bucket (`STANDARD`, `NEARLINE`, `COLDLINE`, etc.). | `"STANDARD"` |
+| `noncurrent_version_retention_count` | How many old versions of your state file to keep before cleaning them up. | `10` |
+
+### 3. Create the Cloud Storage bucket
+Initialize Terraform and apply the configuration to create your bucket:
 
 ```bash
 terraform init
-terraform plan
 terraform apply
 ```
-*(Or without a `terraform.tfvars` file: `terraform apply -var="gcp_project_id=your-gcp-project-id"`)*
 
-### 4. Configure and Migrate to the Remote GCS Backend
-1. Retrieve the generated bucket name from the Terraform outputs:
-   ```bash
-   terraform output -raw state_bucket_name
-   ```
-2. Copy [`backend.tf.sample`](backend.tf.sample) to `backend.tf`:
+Review the plan when prompted, type `yes`, and Terraform will enable the APIs and create your bucket.
+
+### 4. Grab your new bucket's name
+Once `terraform apply` finishes, it will print out the name of your newly created bucket (`state_bucket_name`). You can also grab it anytime by running:
+
+```bash
+terraform output -raw state_bucket_name
+```
+
+### 5. Switch your backend to the new bucket
+Now that the bucket exists, tell Terraform to store its state inside it:
+
+1. Copy [`backend.tf.sample`](backend.tf.sample) to a new file named `backend.tf`:
    ```bash
    cp backend.tf.sample backend.tf
    ```
-3. Replace `BUCKETNAME` in `backend.tf` with the output value from step 1:
+2. Open `backend.tf` and replace `BUCKETNAME` with the bucket name from Step 4:
    ```hcl
    terraform {
      backend "gcs" {
-       bucket = "<YOUR_GENERATED_BUCKET_NAME>"
+       bucket = "your-generated-bucket-name-tfstate"
        prefix = "terraform/state"
      }
    }
    ```
-4. Re-initialize Terraform to migrate your local state file into the new GCS bucket:
+3. Run `terraform init` with the `-migrate-state` flag:
    ```bash
    terraform init -migrate-state
    ```
-   When prompted by Terraform, type `yes` to copy the existing local state to the remote Cloud Storage bucket.
-5. Verify that the remote state backend is active:
-   ```bash
-   terraform show
-   ```
-   Once verified, you can safely delete the leftover local `terraform.tfstate` and `terraform.tfstate.backup` files.
+   Terraform will detect your local state file and ask if you want to copy it to your new Cloud Storage bucket. Type `yes` and press Enter.
 
----
+### 6. Verify everything works
+Run the following command to confirm Terraform is now reading the state directly from Google Cloud Storage:
 
-## Terraform Reference
+```bash
+terraform show
+```
 
-### Requirements
-
-| Name | Version |
-| :--- | :--- |
-| `terraform` | `>= 1.5.0` |
-| `google` | `>= 5.0, < 7.0` |
-| `random` | `~> 3.6` |
-
-### Providers
-
-| Name | Source | Version |
-| :--- | :--- | :--- |
-| `google` | `hashicorp/google` | `>= 5.0, < 7.0` |
-| `random` | `hashicorp/random` | `~> 3.6` |
-
-### Resources
-
-| Name | Type |
-| :--- | :--- |
-| `google_project_service.cloudresourcemanager` | resource |
-| `google_project_service.storage` | resource |
-| `google_storage_bucket.tf_state_storage` | resource |
-| `random_id.bucket_prefix` | resource |
-
-### Inputs
-
-| Name | Description | Type | Default | Required |
-| :--- | :--- | :--- | :--- | :---: |
-| `gcp_project_id` | The ID of the Google Cloud project where the state bucket will be created. | `string` | n/a | **yes** |
-| `gcp_region` | Default Google Cloud region for the provider. | `string` | `"europe-west4"` | no |
-| `bucket_location` | Location for the GCS state bucket (e.g., `'EU'`, `'US'`, `'ASIA'`, or a specific region like `'europe-west4'`). | `string` | `"EU"` | no |
-| `storage_class` | Storage class of the GCS state bucket (`STANDARD`, `MULTI_REGIONAL`, `REGIONAL`, `NEARLINE`, `COLDLINE`, `ARCHIVE`). | `string` | `"STANDARD"` | no |
-| `noncurrent_version_retention_count` | Number of noncurrent (historical) Terraform state file versions to retain before automatic cleanup. | `number` | `10` | no |
-
-### Outputs
-
-| Name | Description |
-| :--- | :--- |
-| `state_bucket_name` | The name of the created Google Cloud Storage bucket for Terraform state. |
-| `state_bucket_url` | The base URL of the created Google Cloud Storage bucket (`gs://<bucket_name>`). |
-
----
+You should see the details of your current state. At this point, your state is safely stored in GCS, and you can delete the leftover local `terraform.tfstate` and `terraform.tfstate.backup` files from your folder if you'd like.
 
 VAMOS, happy coding! :smiley:
