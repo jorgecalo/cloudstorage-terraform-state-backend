@@ -8,7 +8,7 @@ This repository helps you spin up a **Google Cloud Storage (GCS)** bucket config
 - **Enables the required GCP APIs** automatically (Cloud Resource Manager and Cloud Storage).
 - **Creates a globally unique bucket name** (`<random-hex>-bucket-tfstate`) so you don't run into naming conflicts.
 - **Keeps your state safe and private** by blocking public access, enforcing IAM-only permissions (uniform bucket-level access), and preventing accidental bucket deletion (`force_destroy = false`).
-- **Turns on object versioning** so you can recover previous state files if something goes wrong, while automatically cleaning up old versions (keeping the latest 10 by default) so you don't pay for clutter.
+- **Turns on object versioning and 7-day soft delete** so you can recover previous or accidentally deleted state files if something goes wrong, while automatically cleaning up older archived versions (keeping the latest 10 by default) so you don't pay for clutter.
 
 ---
 
@@ -69,35 +69,75 @@ Once `terraform apply` finishes, it will print out the name of your newly create
 terraform output -raw state_bucket_name
 ```
 
-### 5. Switch your backend to the new bucket
-Now that the bucket exists, tell Terraform to store its state inside it:
+---
 
-1. Copy [`backend.tf.sample`](backend.tf.sample) to a new file named `backend.tf`:
-   ```bash
-   cp backend.tf.sample backend.tf
-   ```
-2. Open `backend.tf` and replace `BUCKETNAME` with the bucket name from Step 4:
-   ```hcl
-   terraform {
-     backend "gcs" {
-       bucket = "your-generated-bucket-name-tfstate"
-       prefix = "terraform/state"
-     }
-   }
-   ```
-3. Run `terraform init` with the `-migrate-state` flag:
-   ```bash
-   terraform init -migrate-state
-   ```
-   Terraform will detect your local state file and ask if you want to copy it to your new Cloud Storage bucket. Type `yes` and press Enter.
+## Migrating Your Local Terraform State to Google Cloud Storage
 
-### 6. Verify everything works
-Run the following command to confirm Terraform is now reading the state directly from Google Cloud Storage:
+Because Terraform can't store state in a bucket that doesn't exist yet, your first `terraform apply` creates a **local** `terraform.tfstate` file on your machine.
+
+Whether you are migrating the state for **this repository** or moving an **existing Terraform project** that already has a local `terraform.tfstate` file into your new bucket, follow these steps:
+
+### 1. Configure `backend.tf`
+Copy [`backend.tf.sample`](backend.tf.sample) to a new file named `backend.tf` in the root folder of your Terraform project:
+
+```bash
+cp backend.tf.sample backend.tf
+```
+
+Open `backend.tf` and replace `BUCKETNAME` with the bucket name from Step 4:
+
+```hcl
+terraform {
+  backend "gcs" {
+    bucket = "your-generated-bucket-name-tfstate"
+    prefix = "terraform/state"
+  }
+}
+```
+
+> **Tip for multiple projects:** If you plan to use this same GCS bucket to store state for several different Terraform projects or environments, just give each project its own unique `prefix` (for example, `prefix = "network/prod"` or `prefix = "app/staging"`).
+
+### 2. Run the state migration
+Run `terraform init` with the `-migrate-state` flag to tell Terraform to move your local state into Google Cloud Storage:
+
+```bash
+terraform init -migrate-state
+```
+
+Terraform will detect your local `terraform.tfstate` file, acquire a state lock on the GCS bucket, and ask for your confirmation:
+
+```text
+Initializing the backend...
+Do you want to copy existing state to the new backend?
+  Pre-existing state was found while migrating the previous "local" backend to the
+  newly configured "gcs" backend. No existing state was found in the newly
+  configured "gcs" backend. Do you want to copy this state to the new "gcs"
+  backend? Enter "yes" to copy and "no" to start with an empty state.
+
+  Enter a value: yes
+```
+
+Type **`yes`** and press **Enter**. Terraform will upload your state to `gs://<your-bucket-name>/terraform/state/default.tfstate`.
+
+### 3. Verify the migration succeeded
+Before deleting anything locally, run a quick check to make sure Terraform is reading your state from Google Cloud Storage and sees no unexpected changes:
+
+```bash
+terraform state list
+terraform plan
+```
+
+`terraform plan` should report **`No changes. Your infrastructure matches the configuration.`** You can also inspect the full remote state anytime with:
 
 ```bash
 terraform show
 ```
 
-You should see the details of your current state. At this point, your state is safely stored in GCS, and you can delete the leftover local `terraform.tfstate` and `terraform.tfstate.backup` files from your folder if you'd like.
+### 4. Clean up your local state files
+After migrating to GCS, Terraform clears out the local `terraform.tfstate` file, but keeps a local `terraform.tfstate.backup` file on disk as a safety net. Once you've verified that `terraform plan` works against the remote bucket, you can safely remove the leftover local state files so sensitive data isn't sitting on your machine:
+
+```bash
+rm -f terraform.tfstate terraform.tfstate.backup
+```
 
 VAMOS, happy coding! :smiley:

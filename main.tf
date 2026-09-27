@@ -50,6 +50,10 @@ resource "google_storage_bucket" "tf_state_storage" {
     enabled = true
   }
 
+  soft_delete_policy {
+    retention_duration_seconds = 604800
+  }
+
   lifecycle_rule {
     action {
       type = "Delete"
